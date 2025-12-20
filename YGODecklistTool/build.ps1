@@ -8,6 +8,38 @@ $bundledPythonExe = Join-Path $bundledPythonDir "python.exe"
 $pythonVersion = "3.12.6"
 $pythonArch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "win32" }
 
+function Resolve-SystemPython {
+  $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+  if ($pythonCommand) {
+    return $pythonCommand.Source
+  }
+
+  $pyCommand = Get-Command py -ErrorAction SilentlyContinue
+  if (-not $pyCommand) {
+    return $null
+  }
+
+  try {
+    $pythonPath = & $pyCommand.Source -3.12 -c "import sys; print(sys.executable)"
+    if ($LASTEXITCODE -eq 0 -and $pythonPath) {
+      return $pythonPath.Trim()
+    }
+  } catch {
+    # Ignore and fall through to return null.
+  }
+
+  try {
+    $pythonPath = & $pyCommand.Source -3 -c "import sys; print(sys.executable)"
+    if ($LASTEXITCODE -eq 0 -and $pythonPath) {
+      return $pythonPath.Trim()
+    }
+  } catch {
+    # Ignore and fall through to return null.
+  }
+
+  return $null
+}
+
 function Install-BundledPython {
   param(
     [switch]$Force
@@ -44,6 +76,14 @@ function Install-BundledPython {
     "TargetDir=$bundledPythonDir"
   )
   $process = Start-Process -FilePath $installerPath -ArgumentList $installArgs -Wait -PassThru
+  if ($process.ExitCode -eq 1638) {
+    Write-Warning "Bundled Python installer reported an existing installation (code 1638). Falling back to system Python."
+    $systemPython = Resolve-SystemPython
+    if ($systemPython) {
+      return $systemPython
+    }
+  }
+
   if ($process.ExitCode -ne 0) {
     throw "Bundled Python installer exited with code $($process.ExitCode)."
   }
