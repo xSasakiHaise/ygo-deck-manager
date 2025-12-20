@@ -3,26 +3,38 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $venvPath = Join-Path $projectRoot ".venv"
 $pythonExe = Join-Path $venvPath "Scripts\python.exe"
+$bundledPythonDir = Join-Path $projectRoot ".python"
+$bundledPythonExe = Join-Path $bundledPythonDir "python.exe"
+$pythonVersion = "3.12.6"
+$pythonArch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "win32" }
 
-function Resolve-Python {
-  $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
-  if ($pythonCommand) {
-    return $pythonCommand.Source
+function Install-BundledPython {
+  if (Test-Path $bundledPythonExe) {
+    return $bundledPythonExe
   }
 
-  $pyCommand = Get-Command py -ErrorAction SilentlyContinue
-  if ($pyCommand) {
-    return "$($pyCommand.Source) -3"
+  $installerName = "python-$pythonVersion-$pythonArch.exe"
+  $installerUrl = "https://www.python.org/ftp/python/$pythonVersion/$installerName"
+  $installerPath = Join-Path $projectRoot $installerName
+
+  Write-Host "Python not found. Downloading $installerUrl..."
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+
+  Write-Host "Installing bundled Python to $bundledPythonDir..."
+  & $installerPath /quiet InstallAllUsers=0 PrependPath=0 Include_pip=1 TargetDir="$bundledPythonDir"
+
+  Remove-Item $installerPath -Force
+
+  if (!(Test-Path $bundledPythonExe)) {
+    throw "Bundled Python installation failed. Ensure you can download and run the installer."
   }
 
-  return $null
+  return $bundledPythonExe
 }
 
 if (!(Test-Path $pythonExe)) {
-  $systemPython = Resolve-Python
-  if (!$systemPython) {
-    throw "Python was not found. Install Python 3 or enable the 'python'/'py' launcher, then rerun build.ps1."
-  }
+  $systemPython = Install-BundledPython
 
   & $systemPython -m venv $venvPath
   if (!(Test-Path $pythonExe)) {
