@@ -11,7 +11,14 @@ $pythonArch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "win
 function Resolve-SystemPython {
   $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
   if ($pythonCommand) {
-    return $pythonCommand.Source
+    try {
+      $pythonPath = & $pythonCommand.Source -c "import sys; print(sys.executable)" 2>$null
+      if ($LASTEXITCODE -eq 0 -and $pythonPath) {
+        return $pythonPath.Trim()
+      }
+    } catch {
+      # Ignore and fall through to try other resolvers.
+    }
   }
 
   $pyCommand = Get-Command py -ErrorAction SilentlyContinue
@@ -45,6 +52,8 @@ function Install-BundledPython {
     [switch]$Force
   )
 
+  $hadBundledPython = Test-Path $bundledPythonExe
+
   if ($Force -and (Test-Path $bundledPythonDir)) {
     Remove-Item $bundledPythonDir -Recurse -Force
   }
@@ -62,7 +71,7 @@ function Install-BundledPython {
   Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath | Out-Null
 
   Write-Host "Installing bundled Python to $bundledPythonDir..."
-  if (Test-Path $bundledPythonDir) {
+  if ($Force -and (Test-Path $bundledPythonDir)) {
     Remove-Item $bundledPythonDir -Recurse -Force
   }
   $installArgs = @(
@@ -78,10 +87,14 @@ function Install-BundledPython {
   $process = Start-Process -FilePath $installerPath -ArgumentList $installArgs -Wait -PassThru
   if ($process.ExitCode -eq 1638) {
     Write-Warning "Bundled Python installer reported an existing installation (code 1638). Falling back to system Python."
+    if ($hadBundledPython -and (Test-Path $bundledPythonExe)) {
+      return $bundledPythonExe
+    }
     $systemPython = Resolve-SystemPython
     if ($systemPython) {
       return $systemPython
     }
+    throw "Bundled Python installer returned code 1638, but no usable system Python was found. Disable the Microsoft Store Python alias or install Python 3.12+."
   }
 
   if ($process.ExitCode -ne 0) {
