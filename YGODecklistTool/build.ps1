@@ -22,9 +22,23 @@ function Install-BundledPython {
   Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
 
   Write-Host "Installing bundled Python to $bundledPythonDir..."
-  & $installerPath /quiet InstallAllUsers=0 PrependPath=0 Include_pip=1 TargetDir="$bundledPythonDir"
+  $installerProcess = Start-Process -FilePath $installerPath -ArgumentList @(
+    "/quiet",
+    "InstallAllUsers=0",
+    "PrependPath=0",
+    "Include_pip=1",
+    "TargetDir=`"$bundledPythonDir`""
+  ) -Wait -PassThru
 
-  Remove-Item $installerPath -Force
+  if ($installerProcess.ExitCode -ne 0) {
+    throw "Bundled Python installer failed with exit code $($installerProcess.ExitCode)."
+  }
+
+  try {
+    Remove-Item $installerPath -Force
+  } catch {
+    Write-Warning "Unable to remove installer at $installerPath. You may delete it manually."
+  }
 
   if (!(Test-Path $bundledPythonExe)) {
     throw "Bundled Python installation failed. Ensure you can download and run the installer."
