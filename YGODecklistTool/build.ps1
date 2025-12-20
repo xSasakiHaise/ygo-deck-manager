@@ -24,8 +24,8 @@ $pyinstaller = Join-Path $venvPath "Scripts\pyinstaller.exe"
 $assetsDir = Join-Path $projectRoot "assets"
 $separator = ";"
 
-& $pyinstaller --onefile --noconsole --name "YGODecklistTool" \
-  --add-data "$assetsDir\cards.json${separator}assets" \
-  --add-data "$assetsDir\rarity_hierarchy_main.json${separator}assets" \
-  --add-data "$assetsDir\rarity_hierarchy_extra_side.json${separator}assets" \
+& $pyinstaller --onefile --noconsole --name "YGODecklistTool" `
+  --add-data "$assetsDir\cards.json${separator}assets" `
+  --add-data "$assetsDir\rarity_hierarchy_main.json${separator}assets" `
+  --add-data "$assetsDir\rarity_hierarchy_extra_side.json${separator}assets" `
   (Join-Path $projectRoot "src\main.py")
