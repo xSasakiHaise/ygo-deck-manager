@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $venvPath = Join-Path $projectRoot ".venv"
 $pythonExe = Join-Path $venvPath "Scripts\python.exe"
-$bundledPythonDir = Join-Path $projectRoot ".python"
+$bundledPythonDir = Join-Path $projectRoot "tools\.python"
 $bundledPythonExe = Join-Path $bundledPythonDir "python.exe"
 $pythonVersion = "3.12.6"
 $pythonArch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "win32" }
@@ -13,35 +13,46 @@ function Install-BundledPython {
     return $bundledPythonExe
   }
 
-  $installerName = "python-$pythonVersion-$pythonArch.exe"
-  $installerUrl = "https://www.python.org/ftp/python/$pythonVersion/$installerName"
-  $installerPath = Join-Path $projectRoot $installerName
+  $archiveName = "python-$pythonVersion-embed-$pythonArch.zip"
+  $archiveUrl = "https://www.python.org/ftp/python/$pythonVersion/$archiveName"
+  $archivePath = Join-Path $projectRoot $archiveName
 
-  Write-Host "Python not found. Downloading $installerUrl..."
+  Write-Host "Python not found. Downloading $archiveUrl..."
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-  Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+  Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath
 
-  Write-Host "Installing bundled Python to $bundledPythonDir..."
-  $installerProcess = Start-Process -FilePath $installerPath -ArgumentList @(
-    "/quiet",
-    "InstallAllUsers=0",
-    "PrependPath=0",
-    "Include_pip=1",
-    "TargetDir=`"$bundledPythonDir`""
-  ) -Wait -PassThru
-
-  if ($installerProcess.ExitCode -ne 0) {
-    throw "Bundled Python installer failed with exit code $($installerProcess.ExitCode)."
+  Write-Host "Extracting bundled Python to $bundledPythonDir..."
+  if (Test-Path $bundledPythonDir) {
+    Remove-Item $bundledPythonDir -Recurse -Force
   }
+  New-Item -ItemType Directory -Path $bundledPythonDir | Out-Null
+  Expand-Archive -Path $archivePath -DestinationPath $bundledPythonDir
 
   try {
-    Remove-Item $installerPath -Force
+    Remove-Item $archivePath -Force
   } catch {
-    Write-Warning "Unable to remove installer at $installerPath. You may delete it manually."
+    Write-Warning "Unable to remove archive at $archivePath. You may delete it manually."
   }
 
+  $pthFile = Join-Path $bundledPythonDir "python$($pythonVersion.Split('.')[0])$($pythonVersion.Split('.')[1])._pth"
+  if (Test-Path $pthFile) {
+    $pthContent = Get-Content $pthFile
+    if ($pthContent -notcontains "Lib\site-packages") {
+      $pthContent = @("Lib\site-packages") + $pthContent
+    }
+    $pthContent = $pthContent | ForEach-Object { $_ -replace "^#import site$", "import site" }
+    Set-Content -Path $pthFile -Value $pthContent
+  }
+
+  $getPipUrl = "https://bootstrap.pypa.io/get-pip.py"
+  $getPipPath = Join-Path $projectRoot "get-pip.py"
+  Write-Host "Bootstrapping pip..."
+  Invoke-WebRequest -Uri $getPipUrl -OutFile $getPipPath
+  & $bundledPythonExe $getPipPath --no-warn-script-location
+  Remove-Item $getPipPath -Force
+
   if (!(Test-Path $bundledPythonExe)) {
-    throw "Bundled Python installation failed. Ensure you can download and run the installer."
+    throw "Bundled Python installation failed. Ensure you can download and extract the archive."
   }
 
   return $bundledPythonExe
