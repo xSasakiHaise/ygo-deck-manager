@@ -9,7 +9,15 @@ $pythonVersion = "3.12.6"
 $pythonArch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "win32" }
 
 function Install-BundledPython {
-  if (Test-Path $bundledPythonExe) {
+  param(
+    [switch]$Force
+  )
+
+  if ($Force -and (Test-Path $bundledPythonDir)) {
+    Remove-Item $bundledPythonDir -Recurse -Force
+  }
+
+  if ((-not $Force) -and (Test-Path $bundledPythonExe)) {
     return $bundledPythonExe
   }
 
@@ -30,6 +38,9 @@ function Install-BundledPython {
     "InstallAllUsers=0",
     "PrependPath=0",
     "Include_test=0",
+    "Include_lib=1",
+    "Include_pip=1",
+    "Include_vcruntime=1",
     "TargetDir=$bundledPythonDir"
   )
   $process = Start-Process -FilePath $installerPath -ArgumentList $installArgs -Wait -PassThru
@@ -65,6 +76,31 @@ if (!(Test-Path $pythonExe)) {
 
   if (-not $venvCreated) {
     throw "Python virtual environment creation failed. Ensure Python 3, venv, or virtualenv are available."
+  }
+}
+
+& $pythonExe -c "import ctypes" | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  Write-Warning "Bundled Python appears unhealthy (ctypes import failed). Reinstalling..."
+  if (Test-Path $venvPath) {
+    Remove-Item $venvPath -Recurse -Force
+  }
+  $systemPython = Install-BundledPython -Force
+  & $systemPython -m venv $venvPath
+  if ($LASTEXITCODE -ne 0) {
+    throw "Python virtual environment creation failed after reinstall."
+  }
+  & $pythonExe -c "import ctypes" | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Bundled Python is still unable to import ctypes. Please reinstall Python."
+  }
+}
+
+& $pythonExe -m pip --version | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  & $pythonExe -m ensurepip --upgrade
+  if ($LASTEXITCODE -ne 0) {
+    throw "pip bootstrap failed. Ensure Python includes ensurepip."
   }
 }
 
