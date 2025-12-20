@@ -62,8 +62,17 @@ if (!(Test-Path $pythonExe)) {
   $systemPython = Install-BundledPython
 
   & $systemPython -m venv $venvPath
-  if (!(Test-Path $pythonExe)) {
-    throw "Python virtual environment creation failed. Ensure Python 3 and venv are available."
+  $venvCreated = ($LASTEXITCODE -eq 0) -and (Test-Path $pythonExe)
+
+  if (-not $venvCreated) {
+    Write-Host "Standard venv module unavailable. Installing virtualenv..."
+    & $systemPython -m pip install --upgrade pip virtualenv
+    & $systemPython -m virtualenv $venvPath
+    $venvCreated = ($LASTEXITCODE -eq 0) -and (Test-Path $pythonExe)
+  }
+
+  if (-not $venvCreated) {
+    throw "Python virtual environment creation failed. Ensure Python 3, venv, or virtualenv are available."
   }
 }
 
