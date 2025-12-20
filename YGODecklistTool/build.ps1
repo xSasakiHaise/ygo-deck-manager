@@ -19,7 +19,7 @@ function Install-BundledPython {
 
   Write-Host "Python not found. Downloading $archiveUrl..."
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-  Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath
+  Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath | Out-Null
 
   Write-Host "Extracting bundled Python to $bundledPythonDir..."
   if (Test-Path $bundledPythonDir) {
@@ -47,8 +47,8 @@ function Install-BundledPython {
   $getPipUrl = "https://bootstrap.pypa.io/get-pip.py"
   $getPipPath = Join-Path $projectRoot "get-pip.py"
   Write-Host "Bootstrapping pip..."
-  Invoke-WebRequest -Uri $getPipUrl -OutFile $getPipPath
-  & $bundledPythonExe $getPipPath --no-warn-script-location
+  Invoke-WebRequest -Uri $getPipUrl -OutFile $getPipPath | Out-Null
+  $null = & $bundledPythonExe $getPipPath --no-warn-script-location
   Remove-Item $getPipPath -Force
 
   if (!(Test-Path $bundledPythonExe)) {
