@@ -4,8 +4,30 @@ $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $venvPath = Join-Path $projectRoot ".venv"
 $pythonExe = Join-Path $venvPath "Scripts\python.exe"
 
+function Resolve-Python {
+  $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+  if ($pythonCommand) {
+    return $pythonCommand.Source
+  }
+
+  $pyCommand = Get-Command py -ErrorAction SilentlyContinue
+  if ($pyCommand) {
+    return "$($pyCommand.Source) -3"
+  }
+
+  return $null
+}
+
 if (!(Test-Path $pythonExe)) {
-  python -m venv $venvPath
+  $systemPython = Resolve-Python
+  if (!$systemPython) {
+    throw "Python was not found. Install Python 3 or enable the 'python'/'py' launcher, then rerun build.ps1."
+  }
+
+  & $systemPython -m venv $venvPath
+  if (!(Test-Path $pythonExe)) {
+    throw "Python virtual environment creation failed. Ensure Python 3 and venv are available."
+  }
 }
 
 & $pythonExe -m pip install --upgrade pip
