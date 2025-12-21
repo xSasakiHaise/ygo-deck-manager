@@ -8,6 +8,8 @@ from deck_io import load_deck, save_deck
 from deck_model import DeckEntry, DeckModel
 from pdf_decklist import export_decklist_pdf
 from pdf_overview import export_overview_pdf
+from settings import load_settings, save_settings
+from sort_utils import canonical_sort_entries, canonical_sort_key, rarity_rank_for_entry, section_rank
 from yugioh_data import (
     get_card_by_id,
     get_card_by_name,
@@ -21,13 +23,21 @@ SECTIONS = ["Main", "Extra", "Side"]
 
 
 class Autocomplete:
-    def __init__(self, entry: ttk.Entry, on_select) -> None:
+    def __init__(self, entry: ttk.Entry, on_select, colors: Dict[str, str]) -> None:
         self.entry = entry
         self.on_select = on_select
         self.popup = tk.Toplevel(entry)
         self.popup.withdraw()
         self.popup.overrideredirect(True)
         self.listbox = tk.Listbox(self.popup, height=10)
+        self.listbox.configure(
+            background=colors["entry_bg"],
+            foreground=colors["fg"],
+            selectbackground=colors["selection"],
+            selectforeground=colors["fg"],
+            highlightthickness=0,
+            borderwidth=1,
+        )
         self.listbox.pack(fill=tk.BOTH, expand=True)
         self.listbox.bind("<<ListboxSelect>>", self._select)
         self.listbox.bind("<Return>", self._select)
@@ -63,6 +73,9 @@ class DeckApp:
         self.root = root
         self.root.title("YGO Decklist Tool")
         self.model = DeckModel()
+        self.settings = load_settings()
+        self.current_sort_column: Optional[str] = None
+        self.current_sort_desc = False
         self.db_available = True
         try:
             self.rarity_main = load_rarity_hierarchy_main()
@@ -72,7 +85,83 @@ class DeckApp:
             self.rarity_main = {}
             self.rarity_extra = {}
 
+        self._apply_style()
         self._build_ui()
+        geometry = self.settings.get("window_geometry")
+        if geometry:
+            self.root.geometry(geometry)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _apply_style(self) -> None:
+        style = ttk.Style()
+        style.theme_use("clam")
+        self._colors = {
+            "bg": "#1e1e1e",
+            "fg": "#f0f0f0",
+            "accent": "#2d2d2d",
+            "entry_bg": "#2b2b2b",
+            "selection": "#3a6ea5",
+            "header_bg": "#333333",
+            "tree_bg": "#252525",
+        }
+        colors = self._colors
+        self.root.configure(bg=colors["bg"])
+
+        style.configure("TFrame", background=colors["bg"])
+        style.configure("TLabel", background=colors["bg"], foreground=colors["fg"])
+        style.configure(
+            "TButton",
+            background=colors["accent"],
+            foreground=colors["fg"],
+            padding=6,
+        )
+        style.map(
+            "TButton",
+            background=[("active", "#3a3a3a")],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=colors["entry_bg"],
+            background=colors["entry_bg"],
+            foreground=colors["fg"],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=colors["entry_bg"],
+            background=colors["entry_bg"],
+            foreground=colors["fg"],
+        )
+        style.configure(
+            "TSpinbox",
+            fieldbackground=colors["entry_bg"],
+            background=colors["entry_bg"],
+            foreground=colors["fg"],
+        )
+        style.configure("TLabelframe", background=colors["bg"], foreground=colors["fg"])
+        style.configure(
+            "TLabelframe.Label",
+            background=colors["bg"],
+            foreground=colors["fg"],
+        )
+        style.configure(
+            "Treeview",
+            background=colors["tree_bg"],
+            fieldbackground=colors["tree_bg"],
+            foreground=colors["fg"],
+            rowheight=22,
+            borderwidth=0,
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=colors["header_bg"],
+            foreground=colors["fg"],
+            font=("Helvetica", 9, "bold"),
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", colors["selection"])],
+            foreground=[("selected", colors["fg"])],
+        )
 
     def _build_ui(self) -> None:
         main_frame = ttk.Frame(self.root, padding=10)
@@ -104,7 +193,7 @@ class DeckApp:
             ("rarity", "Rarity"),
         ]
         for col, label in headings:
-            self.tree.heading(col, text=label)
+            self.tree.heading(col, text=label, command=lambda c=col: self._sort_tree_by_column(c))
             self.tree.column(col, width=110 if col == "name_eng" else 80)
         self.tree.pack(fill=tk.BOTH, expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
@@ -113,15 +202,19 @@ class DeckApp:
         counter_frame.pack(fill=tk.X, pady=5)
         self.counter_label = ttk.Label(counter_frame, text="Main: 0 / Extra: 0 / Side: 0")
         self.counter_label.pack(anchor=tk.W)
+        ttk.Button(counter_frame, text="Reset Sort", command=self._reset_sort).pack(anchor=tk.E, pady=2)
 
         form = ttk.LabelFrame(right_frame, text="Entry")
         form.pack(fill=tk.X, pady=5)
 
         ttk.Label(form, text="Section").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
-        self.section_var = tk.StringVar(value="Main")
+        default_section = self.settings.get("last_section", "Main")
+        if default_section not in SECTIONS:
+            default_section = "Main"
+        self.section_var = tk.StringVar(value=default_section)
         self.section_combo = ttk.Combobox(form, textvariable=self.section_var, values=SECTIONS, state="readonly")
         self.section_combo.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=2)
-        self.section_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_rarity_values())
+        self.section_combo.bind("<<ComboboxSelected>>", self._on_section_change)
 
         ttk.Label(form, text="Name [ENG]").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
         self.name_eng_var = tk.StringVar()
@@ -189,8 +282,11 @@ class DeckApp:
         ttk.Entry(header_frame, textvariable=self.event_var).grid(row=2, column=1, sticky=tk.EW, padx=5, pady=2)
         header_frame.columnconfigure(1, weight=1)
 
-        self.autocomplete = Autocomplete(self.name_eng_entry, self._select_autocomplete)
+        colors = self._colors
+        self.autocomplete = Autocomplete(self.name_eng_entry, self._select_autocomplete, colors)
         self._refresh_rarity_values()
+        self._apply_canonical_sort()
+        self._refresh_tree()
 
     def _get_card_from_form(self) -> Optional[dict]:
         if self.card_id_var.get().strip():
@@ -218,6 +314,14 @@ class DeckApp:
         self.rarity_combo["values"] = values
         if self.rarity_var.get() not in values:
             self.rarity_var.set(values[0] if values else "")
+
+    def _persist_section(self) -> None:
+        self.settings["last_section"] = self.section_var.get()
+        save_settings(self.settings)
+
+    def _on_section_change(self, _event) -> None:
+        self._refresh_rarity_values()
+        self._persist_section()
 
     def _on_name_key(self, _event) -> None:
         if not self.db_available:
@@ -286,7 +390,8 @@ class DeckApp:
         if not entry:
             return
         self.model.add_entry(entry)
-        self._refresh_tree()
+        self._apply_canonical_sort()
+        self._reset_sort()
         self._clear_form()
 
     def _update_entry(self) -> None:
@@ -299,7 +404,8 @@ class DeckApp:
             return
         index = int(selection[0])
         self.model.update_entry(index, entry)
-        self._refresh_tree()
+        self._apply_canonical_sort()
+        self._reset_sort()
 
     def _delete_entry(self) -> None:
         selection = self.tree.selection()
@@ -308,11 +414,11 @@ class DeckApp:
             return
         index = int(selection[0])
         self.model.delete_entry(index)
-        self._refresh_tree()
+        self._apply_canonical_sort()
+        self._reset_sort()
         self._clear_form()
 
     def _clear_form(self) -> None:
-        self.section_var.set("Main")
         self.name_eng_var.set("")
         self.name_ger_var.set("")
         self.card_id_var.set("")
@@ -321,10 +427,10 @@ class DeckApp:
         self.amount_var.set(1)
         self._refresh_rarity_values()
 
-    def _refresh_tree(self) -> None:
+    def _populate_tree(self, ordered_entries: List[tuple[int, DeckEntry]]) -> None:
         for item in self.tree.get_children():
             self.tree.delete(item)
-        for idx, entry in enumerate(self.model.entries):
+        for idx, entry in ordered_entries:
             self.tree.insert(
                 "",
                 tk.END,
@@ -339,6 +445,9 @@ class DeckApp:
                     entry.rarity,
                 ),
             )
+
+    def _refresh_tree(self) -> None:
+        self._populate_tree(list(enumerate(self.model.entries)))
         counts = self.model.counts()
         self.counter_label.config(
             text=f"Main: {counts['Main']} / Extra: {counts['Extra']} / Side: {counts['Side']}"
@@ -359,6 +468,61 @@ class DeckApp:
         self.rarity_var.set(entry.rarity)
         self.amount_var.set(entry.amount)
         self._refresh_rarity_values()
+        self._persist_section()
+
+    def _apply_canonical_sort(self) -> None:
+        self.model.entries = canonical_sort_entries(self.model.entries)
+
+    def _reset_sort(self) -> None:
+        self.current_sort_column = None
+        self.current_sort_desc = False
+        self._apply_canonical_sort()
+        self._refresh_tree()
+
+    def _sort_tree_by_column(self, column: str) -> None:
+        if self.current_sort_column == column:
+            self.current_sort_desc = not self.current_sort_desc
+        else:
+            self.current_sort_column = column
+            self.current_sort_desc = False
+
+        def lookup_card(entry: DeckEntry) -> Optional[dict]:
+            if entry.card_id:
+                try:
+                    return get_card_by_id(int(entry.card_id))
+                except (ValueError, FileNotFoundError):
+                    return None
+            if entry.name_eng:
+                try:
+                    return get_card_by_name(entry.name_eng)
+                except FileNotFoundError:
+                    return None
+            return None
+
+        def sort_key(item: tuple[int, DeckEntry]) -> tuple:
+            _, entry = item
+            if column == "amount":
+                return (entry.amount,)
+            if column == "section":
+                return (section_rank(entry.section),)
+            if column == "rarity":
+                return (rarity_rank_for_entry(entry, lookup_card(entry)), entry.rarity.casefold())
+            if column == "name_eng":
+                return (entry.name_eng.casefold(),)
+            if column == "name_ger":
+                return (entry.name_ger.casefold(),)
+            if column == "card_id":
+                return (entry.card_id.casefold(),)
+            if column == "set_code":
+                return (entry.set_code.casefold(),)
+            return canonical_sort_key(entry)
+
+        ordered_entries = sorted(
+            list(enumerate(self.model.entries)),
+            key=sort_key,
+            reverse=self.current_sort_desc,
+        )
+        self._populate_tree(ordered_entries)
 
     def _export_decklist(self) -> None:
         path = filedialog.asksaveasfilename(
@@ -425,8 +589,14 @@ class DeckApp:
         self.deck_name_var.set(header.get("deck_name", ""))
         self.event_var.set(header.get("event_name", ""))
         self.model.entries = entries
-        self._refresh_tree()
+        self._apply_canonical_sort()
+        self._reset_sort()
         messagebox.showinfo("Loaded", f"Loaded deck from {path}")
+
+    def _on_close(self) -> None:
+        self.settings["window_geometry"] = self.root.winfo_geometry()
+        save_settings(self.settings)
+        self.root.destroy()
 
 
 def main() -> None:

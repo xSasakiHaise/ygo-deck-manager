@@ -3,111 +3,141 @@ from __future__ import annotations
 from typing import Dict, List
 
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from deck_model import DeckEntry
+from sort_utils import canonical_sort_entries
 from yugioh_data import (
+    PULL_RARITIES,
     extract_rarities_tcg,
     get_card_by_id,
     get_card_by_name,
     is_extra_deck_monster,
     load_rarity_hierarchy_extra_side,
     load_rarity_hierarchy_main,
-    pick_example_set_codes_by_rarity,
 )
 
 
 def _get_hierarchy(section: str, card: dict | None) -> Dict[str, int]:
     if section == "Extra":
         return load_rarity_hierarchy_extra_side()
-    if section == "Side" and card is not None:
-        if is_extra_deck_monster(card):
-            return load_rarity_hierarchy_extra_side()
+    if section == "Side" and card is not None and is_extra_deck_monster(card):
+        return load_rarity_hierarchy_extra_side()
     return load_rarity_hierarchy_main()
 
 
+def _is_valid_rarity(value: str) -> bool:
+    if not value:
+        return False
+    if value.strip().isdigit():
+        return False
+    if value.strip().lower() == "new":
+        return False
+    if value in PULL_RARITIES:
+        return False
+    return True
+
+
+def _lookup_card(entry: DeckEntry) -> dict | None:
+    card = None
+    if entry.card_id:
+        try:
+            card = get_card_by_id(int(entry.card_id))
+        except (ValueError, FileNotFoundError):
+            card = None
+    if card is None and entry.name_eng:
+        try:
+            card = get_card_by_name(entry.name_eng)
+        except FileNotFoundError:
+            card = None
+    return card
+
+
 def export_overview_pdf(path: str, entries: List[DeckEntry]) -> None:
-    c = canvas.Canvas(path, pagesize=A4)
-    width, height = A4
+    doc = SimpleDocTemplate(
+        path,
+        pagesize=A4,
+        leftMargin=12 * mm,
+        rightMargin=12 * mm,
+        topMargin=12 * mm,
+        bottomMargin=12 * mm,
+    )
 
-    def draw_page_header() -> float:
-        c.setFont("Helvetica-Bold", 16)
-        c.drawString(20 * mm, height - 20 * mm, "Print & Rarity Overview")
-        return height - 28 * mm
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "overview-title",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=14,
+        spaceAfter=8,
+    )
+    section_style = ParagraphStyle(
+        "overview-section",
+        parent=styles["Heading3"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        spaceBefore=10,
+        spaceAfter=6,
+    )
+    line_style = ParagraphStyle(
+        "overview-line",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9.5,
+        leading=12,
+        spaceAfter=2,
+    )
+    title_line_style = ParagraphStyle(
+        "overview-title-line",
+        parent=line_style,
+        fontName="Helvetica-Bold",
+    )
 
-    def draw_section_header(title: str, y: float) -> float:
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(20 * mm, y, title)
-        return y - 6 * mm
+    story = [Paragraph("Print & Rarity Overview", title_style), Spacer(1, 6)]
+    sorted_entries = canonical_sort_entries(entries)
 
-    def draw_text_line(text: str, y: float, indent: float = 0) -> float:
-        c.setFont("Helvetica", 9)
-        c.drawString((20 + indent) * mm, y, text)
-        return y - 5 * mm
-
-    y = draw_page_header()
     for section in ["Main", "Extra", "Side"]:
-        section_entries = [entry for entry in entries if entry.section == section]
+        section_entries = [entry for entry in sorted_entries if entry.section == section]
         if not section_entries:
             continue
-        y = draw_section_header(f"{section} Deck", y)
+        story.append(Paragraph(f"{section} Deck", section_style))
         for entry in section_entries:
-            if y < 25 * mm:
-                c.showPage()
-                y = draw_page_header()
-                y = draw_section_header(f"{section} Deck (cont.)", y)
-
-            card = None
-            if entry.card_id:
-                try:
-                    card = get_card_by_id(int(entry.card_id))
-                except ValueError:
-                    card = None
-            if card is None and entry.name_eng:
-                card = get_card_by_name(entry.name_eng)
-
+            card = _lookup_card(entry)
             hierarchy = _get_hierarchy(entry.section, card)
+
             rarities = []
-            example_codes: Dict[str, str] = {}
             if card is not None:
-                rarities = sorted(
-                    extract_rarities_tcg(card),
-                    key=lambda r: hierarchy.get(r, 0),
-                )
-                example_codes = pick_example_set_codes_by_rarity(card)
+                rarities = [
+                    rarity
+                    for rarity in extract_rarities_tcg(card)
+                    if _is_valid_rarity(rarity)
+                ]
+            rarities = sorted(rarities, key=lambda r: hierarchy.get(r, 0))
 
             current_rank = hierarchy.get(entry.rarity, 0)
             upgrade_rarities = [r for r in rarities if hierarchy.get(r, 0) > current_rank]
-            best_rarity = rarities[-1] if rarities else ""
+            best_rarity = rarities[-1] if rarities else "—"
 
-            name_display = f"{entry.name_ger} / {entry.name_eng}".strip(" /")
-            y = draw_text_line(f"{entry.amount}x {name_display} (ID: {entry.card_id})", y)
-            current_text = f"Current: {entry.set_code} / {entry.rarity}".strip()
-            y = draw_text_line(current_text, y, indent=4)
-            y = draw_text_line(f"Best available: {best_rarity}", y, indent=4)
-
-            if rarities:
-                available_parts = []
-                for rarity in rarities:
-                    code = example_codes.get(rarity, "")
-                    suffix = f" ({code})" if code else ""
-                    available_parts.append(f"{rarity}{suffix}")
-                y = draw_text_line(f"Available rarities: {', '.join(available_parts)}", y, indent=4)
+            name_display = (
+                f"{entry.name_ger} / {entry.name_eng}" if entry.name_ger else entry.name_eng
+            )
+            title_line = f"{entry.amount}x {name_display} (ID: {entry.card_id})"
+            story.append(Paragraph(title_line, title_line_style))
+            current_line = (
+                f"Current: {entry.set_code} / {entry.rarity}".strip()
+                if entry.set_code or entry.rarity
+                else "Current: —"
+            )
+            story.append(Paragraph(current_line, line_style))
+            story.append(Paragraph(f"Best available: {best_rarity}", line_style))
 
             if upgrade_rarities:
-                upgrade_parts = []
-                for rarity in upgrade_rarities:
-                    code = example_codes.get(rarity, "")
-                    suffix = f" ({code})" if code else ""
-                    upgrade_parts.append(f"{rarity}{suffix}")
-                y = draw_text_line(f"Upgrades: {', '.join(upgrade_parts)}", y, indent=4)
+                story.append(Paragraph(f\"Upgrades: {', '.join(upgrade_rarities)}\", line_style))
             else:
-                y = draw_text_line("Upgrades: None", y, indent=4)
+                story.append(Paragraph("Upgrades: —", line_style))
+            story.append(Spacer(1, 6))
+        story.append(Spacer(1, 10))
 
-            y -= 2 * mm
-
-        y -= 4 * mm
-
-    c.showPage()
-    c.save()
+    doc.build(story)
