@@ -504,7 +504,7 @@ class DeckApp:
             if column == "amount":
                 return (entry.amount,)
             if column == "section":
-                return (section_rank(entry.section),)
+                return canonical_sort_key(entry)
             if column == "rarity":
                 return (rarity_rank_for_entry(entry, lookup_card(entry)), entry.rarity.casefold())
             if column == "name_eng":

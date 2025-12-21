@@ -51,12 +51,12 @@ def canonical_sort_key(entry: DeckEntry) -> tuple:
     card_dict = _lookup_card(entry)
     name_ger = entry.name_ger or ""
     name_eng = entry.name_eng or ""
+    primary_name = name_ger or name_eng
     set_code = entry.set_code or ""
     rarity = entry.rarity or ""
     return (
         section_rank(entry.section),
-        name_ger == "",
-        _safe_casefold(name_ger),
+        _safe_casefold(primary_name),
         _safe_casefold(name_eng),
         _safe_casefold(set_code),
         rarity_rank_for_entry(entry, card_dict),
