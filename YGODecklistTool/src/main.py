@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
-from deck_io import load_deck, save_deck
+from deck_io import export_cardmarket_wishlist, load_deck, save_deck
 from deck_model import DeckEntry, DeckModel
 from pdf_decklist import export_decklist_pdf
 from pdf_overview import export_overview_pdf
@@ -263,6 +263,11 @@ class DeckApp:
         exports.pack(fill=tk.X, pady=5)
         ttk.Button(exports, text="Export Decklist PDF", command=self._export_decklist).pack(fill=tk.X, pady=2)
         ttk.Button(exports, text="Export Overview PDF", command=self._export_overview).pack(fill=tk.X, pady=2)
+        ttk.Button(
+            exports,
+            text="Export Cardmarket Wishlist TXT",
+            command=self._export_cardmarket_wishlist,
+        ).pack(fill=tk.X, pady=2)
 
         storage = ttk.LabelFrame(right_frame, text="Deck JSON")
         storage.pack(fill=tk.X, pady=5)
@@ -561,6 +566,22 @@ class DeckApp:
             messagebox.showerror("Export failed", str(exc))
             return
         messagebox.showinfo("Exported", f"Saved overview to {path}")
+
+    def _export_cardmarket_wishlist(self) -> None:
+        path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text", "*.txt")],
+        )
+        if not path:
+            return
+        try:
+            payload = export_cardmarket_wishlist(self.model.entries)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+        except Exception as exc:
+            messagebox.showerror("Export failed", str(exc))
+            return
+        messagebox.showinfo("Exported", f"Saved wishlist import text to {path}")
 
     def _save_deck(self) -> None:
         path = filedialog.asksaveasfilename(
