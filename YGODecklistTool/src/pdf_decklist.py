@@ -2,73 +2,113 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from deck_model import DeckEntry
+from sort_utils import canonical_sort_entries
 
 
 def export_decklist_pdf(path: str, header: Dict[str, str], entries: List[DeckEntry]) -> None:
-    c = canvas.Canvas(path, pagesize=A4)
-    width, height = A4
+    doc = SimpleDocTemplate(
+        path,
+        pagesize=A4,
+        leftMargin=12 * mm,
+        rightMargin=12 * mm,
+        topMargin=12 * mm,
+        bottomMargin=12 * mm,
+    )
 
-    def draw_page_header() -> float:
-        c.setFont("Helvetica-Bold", 16)
-        c.drawString(20 * mm, height - 20 * mm, "Yu-Gi-Oh! TCG Deck List")
-        c.setFont("Helvetica", 10)
-        c.drawString(20 * mm, height - 28 * mm, f"Player: {header.get('player_name', '')}")
-        c.drawString(20 * mm, height - 34 * mm, f"Deck Name: {header.get('deck_name', '')}")
-        c.drawString(20 * mm, height - 40 * mm, f"Event: {header.get('event_name', '')}")
-        return height - 48 * mm
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "decklist-title",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=14,
+        spaceAfter=6,
+    )
+    header_style = ParagraphStyle(
+        "decklist-header",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9.5,
+        spaceAfter=2,
+    )
+    section_style = ParagraphStyle(
+        "decklist-section",
+        parent=styles["Heading3"],
+        fontName="Helvetica-Bold",
+        fontSize=10,
+        spaceBefore=8,
+        spaceAfter=4,
+    )
+    table_header_style = ParagraphStyle(
+        "decklist-table-header",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9.5,
+    )
+    table_body_style = ParagraphStyle(
+        "decklist-table-body",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+    )
 
-    def draw_table_header(y: float) -> float:
-        c.setFont("Helvetica-Bold", 9)
-        headers = ["Qty", "Name (GER)", "Name (ENG)", "Card ID", "Set ID", "Rarity"]
-        x_positions = [20, 35, 90, 145, 175, 200]
-        for header_text, x in zip(headers, x_positions):
-            c.drawString(x * mm, y, header_text)
-        c.line(20 * mm, y - 2, width - 20 * mm, y - 2)
-        return y - 8
-
-    def draw_row(entry: DeckEntry, y: float) -> float:
-        c.setFont("Helvetica", 9)
-        values = [
-            str(entry.amount),
-            entry.name_ger,
-            entry.name_eng,
-            entry.card_id,
-            entry.set_code,
-            entry.rarity,
-        ]
-        x_positions = [20, 35, 90, 145, 175, 200]
-        for value, x in zip(values, x_positions):
-            c.drawString(x * mm, y, value)
-        return y - 7 * mm
+    story = [
+        Paragraph("Yu-Gi-Oh! TCG Deck List", title_style),
+        Paragraph(f"Player: {header.get('player_name', '')}", header_style),
+        Paragraph(f"Deck Name: {header.get('deck_name', '')}", header_style),
+        Paragraph(f"Event: {header.get('event_name', '')}", header_style),
+        Spacer(1, 6),
+    ]
 
     counts = {"Main": 0, "Extra": 0, "Side": 0}
     for entry in entries:
         counts[entry.section] = counts.get(entry.section, 0) + entry.amount
 
-    sections = ["Main", "Extra", "Side"]
-    y = draw_page_header()
-    y = draw_table_header(y)
+    sorted_entries = canonical_sort_entries(entries)
+    column_widths = [28, 150, 150, 58, 50, 90]
+    headers = ["Qty", "Name (GER)", "Name (ENG)", "Card ID", "Set ID", "Rarity"]
 
-    for section in sections:
-        section_entries = [entry for entry in entries if entry.section == section]
+    for section in ["Main", "Extra", "Side"]:
+        section_entries = [entry for entry in sorted_entries if entry.section == section]
         if not section_entries:
             continue
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(20 * mm, y, f"{section} Deck ({counts.get(section, 0)})")
-        y -= 6 * mm
-        y = draw_table_header(y)
+        story.append(Paragraph(f"{section} Deck ({counts.get(section, 0)} cards)", section_style))
+        table_data = [
+            [Paragraph(text, table_header_style) for text in headers],
+        ]
         for entry in section_entries:
-            if y < 25 * mm:
-                c.showPage()
-                y = draw_page_header()
-                y = draw_table_header(y)
-            y = draw_row(entry, y)
-        y -= 4 * mm
+            table_data.append(
+                [
+                    Paragraph(str(entry.amount), table_body_style),
+                    Paragraph(entry.name_ger or "", table_body_style),
+                    Paragraph(entry.name_eng or "", table_body_style),
+                    Paragraph(entry.card_id or "", table_body_style),
+                    Paragraph(entry.set_code or "", table_body_style),
+                    Paragraph(entry.rarity or "", table_body_style),
+                ]
+            )
+        table = Table(table_data, colWidths=column_widths, repeatRows=1)
+        table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ]
+            )
+        )
+        story.append(table)
+        story.append(Spacer(1, 8))
 
-    c.showPage()
-    c.save()
+    doc.build(story)

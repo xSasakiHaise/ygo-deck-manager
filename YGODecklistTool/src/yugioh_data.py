@@ -105,7 +105,9 @@ def extract_rarities_tcg(card: Dict[str, Any]) -> Set[str]:
     return rarities
 
 
-def is_extra_deck_monster(card: Dict[str, Any]) -> bool:
+def is_extra_deck_monster(card: Optional[Dict[str, Any]]) -> bool:
+    if not card:
+        return False
     frame_type = str(card.get("frameType", "")).lower()
     if frame_type in {"fusion", "synchro", "xyz", "link"}:
         return True
