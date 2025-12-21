@@ -550,8 +550,13 @@ class DeckApp:
         )
         if not path:
             return
+        header = {
+            "player_name": self.player_var.get().strip(),
+            "deck_name": self.deck_name_var.get().strip(),
+            "event_name": self.event_var.get().strip(),
+        }
         try:
-            export_overview_pdf(path, self.model.entries)
+            export_overview_pdf(path, header, self.model.entries)
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))
             return
