@@ -30,6 +30,17 @@ def save_deck(path: str, header: Dict[str, str], entries: List[DeckEntry]) -> No
     Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def export_cardmarket_wishlist(entries: List[DeckEntry]) -> str:
+    sorted_entries = canonical_sort_entries(entries)
+    lines = []
+    for entry in sorted_entries:
+        name = entry.name_eng or entry.name_ger
+        if not name:
+            continue
+        lines.append(f"{entry.amount} {name}")
+    return "\n".join(lines)
+
+
 def load_deck(path: str) -> Tuple[Dict[str, str], List[DeckEntry]]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if isinstance(payload, list):
