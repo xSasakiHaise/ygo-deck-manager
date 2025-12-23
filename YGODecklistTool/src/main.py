@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+import webbrowser
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
@@ -292,6 +293,21 @@ class DeckApp:
         self._refresh_rarity_values()
         self._apply_canonical_sort()
         self._refresh_tree()
+
+        footer_frame = ttk.Frame(self.root)
+        footer_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=(0, 10))
+        footer_link = tk.Label(
+            footer_frame,
+            text="© 2025 Hephaestus Forge — Terms",
+            fg="#4ea1ff",
+            bg=colors["bg"],
+            cursor="hand2",
+        )
+        footer_link.pack(anchor=tk.E)
+        footer_link.bind(
+            "<Button-1>",
+            lambda _event: webbrowser.open("https://web.hephaestus-forge.cc/about/terms/"),
+        )
 
     def _get_card_from_form(self) -> Optional[dict]:
         if self.card_id_var.get().strip():
