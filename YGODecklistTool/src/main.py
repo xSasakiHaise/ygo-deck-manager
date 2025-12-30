@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import tkinter as tk
 import webbrowser
 from pathlib import Path
@@ -16,6 +17,9 @@ from pricing.ygopro_prices import (
     PriceConfig,
     default_name_map_path,
     default_price_cache_path,
+    ensure_prices,
+    load_price_cache,
+    save_price_cache_atomic,
 )
 from settings import load_settings, save_settings
 from sort_utils import canonical_sort_entries, canonical_sort_key, rarity_rank_for_entry, section_rank
@@ -732,6 +736,11 @@ def main() -> None:
         type=Path,
         help="Override the YGOPRODeck price cache path.",
     )
+    parser.add_argument(
+        "--prices-selftest",
+        action="store_true",
+        help="Run a quick YGOPRODeck pricing self-test and exit.",
+    )
     args = parser.parse_args()
 
     price_cache_path = args.prices_cache or default_price_cache_path()
@@ -741,6 +750,25 @@ def main() -> None:
         ttl_days=args.prices_ttl_days,
         force_refresh=args.prices_refresh,
     )
+    if args.prices_selftest:
+        test_ids = [
+            "46986414",
+            "89631139",
+            "55144522",
+            "33396948",
+            "24094653",
+        ]
+        price_cache = load_price_cache(price_config.cache_path)
+        summary = ensure_prices(
+            test_ids,
+            price_cache,
+            cache_path=price_config.cache_path,
+            ttl_days=price_config.ttl_days,
+            force_refresh=True,
+            max_requests_per_second=price_config.max_requests_per_second,
+        )
+        save_price_cache_atomic(price_config.cache_path, price_cache)
+        sys.exit(0 if summary.ids_nonzero >= 3 else 1)
 
     root = tk.Tk()
     app = DeckApp(root, price_config=price_config)

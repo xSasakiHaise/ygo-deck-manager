@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+import random
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -44,6 +47,24 @@ class RateLimiter:
         self._next_allowed = time.monotonic() + self._interval
 
 
+def normalize_passcode(raw_id: Any) -> Optional[str]:
+    if raw_id is None:
+        return None
+    if isinstance(raw_id, str):
+        text = raw_id.strip()
+    else:
+        text = str(raw_id).strip()
+    if not text or text == "0":
+        return None
+    try:
+        value = int(text)
+    except (TypeError, ValueError):
+        return None
+    if value == 0:
+        return None
+    return str(value)
+
+
 def _base_path() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -78,18 +99,25 @@ def load_price_cache(path: Path) -> dict[str, dict[str, Any]]:
             price_value = float(price)
         except (TypeError, ValueError):
             continue
-        cleaned[key] = {
+        cleaned_entry: dict[str, Any] = {
             "name": name,
             "cardmarket_price": price_value,
             "updated_at": updated_at,
         }
+        last_error = value.get("last_error")
+        if isinstance(last_error, str) and last_error:
+            cleaned_entry["last_error"] = last_error
+        cleaned[key] = cleaned_entry
     return cleaned
 
 
 def save_price_cache_atomic(path: Path, cache: dict[str, dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    with temp_path.open("w", encoding="utf-8") as handle:
+        json.dump(cache, handle, ensure_ascii=False, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
     temp_path.replace(path)
 
 
@@ -116,7 +144,10 @@ def load_name_cache(path: Path) -> dict[str, int]:
 def save_name_cache_atomic(path: Path, cache: dict[str, int]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    with temp_path.open("w", encoding="utf-8") as handle:
+        json.dump(cache, handle, ensure_ascii=False, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
     temp_path.replace(path)
 
 
@@ -149,10 +180,11 @@ def _request_payload(
     session: requests.Session,
     params: dict[str, Any],
     limiter: RateLimiter,
-) -> Optional[dict[str, Any]]:
-    backoff = 0.5
-    for _attempt in range(MAX_RETRIES):
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    last_error: Optional[str] = None
+    for attempt in range(MAX_RETRIES):
         limiter.wait()
+        response: Optional[requests.Response] = None
         try:
             response = session.get(
                 API_URL,
@@ -161,26 +193,60 @@ def _request_payload(
                 timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
             )
             status = response.status_code
-            if status == 429 or status >= 500:
-                raise requests.HTTPError(response=response)
-            response.raise_for_status()
-            payload = response.json()
+            if status != 200:
+                last_error = f"HTTP {status}"
+                if status == 429 or status >= 500:
+                    raise requests.HTTPError(response=response)
+                return None, last_error
+            try:
+                payload = response.json()
+            except ValueError:
+                return None, "JSON decode error"
             if isinstance(payload, dict):
-                return payload
+                return payload, None
+            return None, "JSON missing object"
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_error = repr(exc)
+        except requests.HTTPError:
+            retry_after = _parse_retry_after(response)
+            _sleep_backoff(attempt, retry_after)
+            continue
+        except requests.RequestException as exc:
+            last_error = repr(exc)
+        _sleep_backoff(attempt)
+    return None, last_error
+
+
+def _parse_retry_after(response: Optional[requests.Response]) -> Optional[float]:
+    if response is None:
+        return None
+    value = response.headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        delay = float(value)
+    except ValueError:
+        try:
+            parsed = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
             return None
-        except (requests.Timeout, requests.ConnectionError):
-            pass
-        except requests.HTTPError as exc:
-            if exc.response is not None:
-                status = exc.response.status_code
-                if status not in {429} and status < 500:
-                    return None
-        time.sleep(backoff)
-        backoff *= 2
-    return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        delay = (parsed - datetime.now(timezone.utc)).total_seconds()
+    return max(0.0, delay)
+
+
+def _sleep_backoff(attempt: int, retry_after: Optional[float] = None) -> None:
+    if retry_after is not None:
+        time.sleep(retry_after)
+        return
+    delay = 0.5 * (2**attempt) + random.uniform(0, 0.2)
+    time.sleep(delay)
 
 
 def parse_cardmarket_price(raw: Any) -> Optional[float]:
+    if raw in (None, "", "N/A"):
+        return 0.0
     try:
         return float(raw)
     except (TypeError, ValueError):
@@ -189,31 +255,31 @@ def parse_cardmarket_price(raw: Any) -> Optional[float]:
 
 def fetch_card_price_by_id(
     session: requests.Session,
-    card_id: int,
+    card_id: str,
     limiter: RateLimiter,
-) -> Optional[tuple[str, float]]:
-    payload = _request_payload(session, {"id": card_id}, limiter)
-    if not payload or "data" not in payload:
-        return None
+) -> tuple[Optional[tuple[str, float]], Optional[str]]:
+    payload, error = _request_payload(session, {"id": card_id}, limiter)
+    if not payload:
+        return None, error or "Request failed"
     data = payload.get("data")
     if not isinstance(data, list) or not data:
-        return None
+        return None, "JSON missing data"
     card = data[0]
     if not isinstance(card, dict):
-        return None
+        return None, "JSON missing card"
     name = card.get("name")
     if not isinstance(name, str):
-        return None
+        return None, "JSON missing name"
     prices = card.get("card_prices")
     if not isinstance(prices, list) or not prices:
-        return None
+        return None, "JSON missing card_prices"
     price_entry = prices[0] if isinstance(prices[0], dict) else None
     if not price_entry:
-        return None
+        return None, "JSON missing price entry"
     price_value = parse_cardmarket_price(price_entry.get("cardmarket_price"))
     if price_value is None:
-        return None
-    return name, price_value
+        return None, "JSON invalid cardmarket_price"
+    return (name, price_value), None
 
 
 def fetch_card_id_by_name(
@@ -221,7 +287,7 @@ def fetch_card_id_by_name(
     name: str,
     limiter: RateLimiter,
 ) -> Optional[tuple[int, str]]:
-    payload = _request_payload(session, {"name": name}, limiter)
+    payload, _error = _request_payload(session, {"name": name}, limiter)
     if not payload or "data" not in payload:
         return None
     data = payload.get("data")
@@ -266,34 +332,100 @@ def resolve_card_id(
 
 
 def ensure_prices(
-    card_ids: set[int],
+    raw_ids: list[Any],
     cache: dict[str, dict[str, Any]],
     *,
+    cache_path: Optional[Path] = None,
     ttl_days: int = PRICE_TTL_DAYS,
     force_refresh: bool = False,
     max_requests_per_second: int = MAX_REQUESTS_PER_SECOND,
-) -> dict[str, dict[str, Any]]:
+) -> "PriceSummary":
+    normalized_ids = [normalize_passcode(card_id) for card_id in raw_ids]
+    ids_total = len(normalized_ids)
+    valid_ids = [card_id for card_id in normalized_ids if card_id is not None]
+    ids_valid = len(valid_ids)
+    unique_ids = sorted(set(valid_ids))
+    ids_requested = 0
+    ids_ok = 0
+    ids_failed = 0
+    failed_diagnostics = 0
     limiter = RateLimiter(max_requests_per_second)
     now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     with requests.Session() as session:
-        for card_id in sorted(card_ids):
-            key = str(card_id)
-            entry = cache.get(key)
+        for card_id in unique_ids:
+            entry = cache.get(card_id)
             if entry and not force_refresh and not is_stale(entry, ttl_days):
                 continue
-            fetched = fetch_card_price_by_id(session, card_id, limiter)
+            ids_requested += 1
+            fetched, error = fetch_card_price_by_id(session, card_id, limiter)
             if fetched is None:
+                ids_failed += 1
+                should_record_error = failed_diagnostics < 5
+                if should_record_error:
+                    failed_diagnostics += 1
+                if entry:
+                    if should_record_error:
+                        entry["last_error"] = error or "Request failed"
+                else:
+                    failure_entry = {
+                        "name": "",
+                        "cardmarket_price": 0.0,
+                        "updated_at": now_iso,
+                    }
+                    if should_record_error:
+                        failure_entry["last_error"] = error or "Request failed"
+                    cache[card_id] = failure_entry
                 continue
+            ids_ok += 1
             name, price = fetched
-            cache[key] = {
+            cache[card_id] = {
                 "name": name,
                 "cardmarket_price": price,
                 "updated_at": now_iso,
             }
-    return cache
+    ids_nonzero = sum(
+        1
+        for card_id in set(valid_ids)
+        if cache.get(card_id, {}).get("cardmarket_price", 0.0) > 0
+    )
+    summary = PriceSummary(
+        ids_total=ids_total,
+        ids_valid=ids_valid,
+        ids_requested=ids_requested,
+        ids_ok=ids_ok,
+        ids_nonzero=ids_nonzero,
+        ids_failed=ids_failed,
+        cache_path=cache_path or default_price_cache_path(),
+    )
+    print(summary.summary_line)
+    return summary
+
+
+@dataclass(frozen=True)
+class PriceSummary:
+    ids_total: int
+    ids_valid: int
+    ids_requested: int
+    ids_ok: int
+    ids_nonzero: int
+    ids_failed: int
+    cache_path: Path
+
+    @property
+    def summary_line(self) -> str:
+        return (
+            "YGOPRO prices: "
+            f"valid={self.ids_valid}/{self.ids_total} "
+            f"requested={self.ids_requested} "
+            f"ok={self.ids_ok} "
+            f"nonzero={self.ids_nonzero} "
+            f"failed={self.ids_failed} "
+            f"cache={self.cache_path}"
+        )
 
 
 __all__ = [
+    "PriceSummary",
     "PriceConfig",
     "PRICE_TTL_DAYS",
     "MAX_REQUESTS_PER_SECOND",
@@ -306,6 +438,7 @@ __all__ = [
     "is_stale",
     "load_name_cache",
     "load_price_cache",
+    "normalize_passcode",
     "parse_cardmarket_price",
     "resolve_card_id",
     "save_name_cache_atomic",

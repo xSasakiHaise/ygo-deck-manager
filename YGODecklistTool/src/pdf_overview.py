@@ -21,6 +21,7 @@ from pricing.ygopro_prices import (
     ensure_prices,
     load_name_cache,
     load_price_cache,
+    normalize_passcode,
     resolve_card_id,
     save_name_cache_atomic,
     save_price_cache_atomic,
@@ -49,26 +50,23 @@ def _build_price_config() -> PriceConfig:
 def _resolve_entry_ids(
     entries: List[DeckEntry],
     config: PriceConfig,
-) -> tuple[dict[str, dict], dict[str, int], dict[int, int]]:
+) -> tuple[dict[str, dict], dict[str, int], dict[int, str]]:
     price_cache = load_price_cache(config.cache_path)
     name_cache = load_name_cache(config.name_map_path)
-    entry_id_map: dict[int, int] = {}
+    entry_id_map: dict[int, str] = {}
     with requests.Session() as session:
         limiter = RateLimiter(config.max_requests_per_second)
         for index, entry in enumerate(entries):
-            card_id = None
-            if entry.card_id:
-                try:
-                    card_id = int(entry.card_id)
-                except ValueError:
-                    card_id = None
-            if card_id is None and entry.name_eng:
-                card_id = resolve_card_id(session, entry.name_eng, name_cache, limiter)
-            if card_id is None and entry.name_ger:
-                card_id = resolve_card_id(session, entry.name_ger, name_cache, limiter)
-            if card_id is None:
+            api_id = normalize_passcode(entry.card_id)
+            if api_id is None and entry.name_eng:
+                resolved = resolve_card_id(session, entry.name_eng, name_cache, limiter)
+                api_id = normalize_passcode(resolved)
+            if api_id is None and entry.name_ger:
+                resolved = resolve_card_id(session, entry.name_ger, name_cache, limiter)
+                api_id = normalize_passcode(resolved)
+            if api_id is None:
                 continue
-            entry_id_map[index] = card_id
+            entry_id_map[index] = api_id
     return price_cache, name_cache, entry_id_map
 
 
@@ -341,16 +339,17 @@ def export_overview_pdf(
     sorted_entries = canonical_sort_entries(entries)
     config = price_config or _build_price_config()
     price_cache, name_cache, entry_id_map = _resolve_entry_ids(sorted_entries, config)
-    if entry_id_map:
-        ensure_prices(
-            set(entry_id_map.values()),
-            price_cache,
-            ttl_days=config.ttl_days,
-            force_refresh=config.force_refresh,
-            max_requests_per_second=config.max_requests_per_second,
-        )
-        save_price_cache_atomic(config.cache_path, price_cache)
-        save_name_cache_atomic(config.name_map_path, name_cache)
+    price_summary = ensure_prices(
+        list(entry_id_map.values()),
+        price_cache,
+        cache_path=config.cache_path,
+        ttl_days=config.ttl_days,
+        force_refresh=config.force_refresh,
+        max_requests_per_second=config.max_requests_per_second,
+    )
+    save_price_cache_atomic(config.cache_path, price_cache)
+    save_name_cache_atomic(config.name_map_path, name_cache)
+    story.append(Paragraph(price_summary.summary_line, line_style))
     recommended_entries = 0
     optional_entries = 0
     total_base_est = 0.0
@@ -384,7 +383,8 @@ def export_overview_pdf(
             best_rarity = rarities[-1] if rarities else "—"
             delta = best_weight - current_weight
             card_id = entry_id_map.get(entry_index)
-            cache_entry = price_cache.get(str(card_id)) if card_id is not None else None
+            api_id = normalize_passcode(card_id)
+            cache_entry = price_cache.get(api_id) if api_id is not None else None
             base_price = cache_entry.get("cardmarket_price", 0.0) if cache_entry else 0.0
             current_multiplier = get_rarity_multiplier(entry.rarity)
             best_multiplier = get_rarity_multiplier(best_rarity) if best_rarity != "—" else 1.0
