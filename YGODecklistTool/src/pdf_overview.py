@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Dict, List
 
+import requests
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -11,7 +12,19 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 from reportlab.graphics.shapes import Circle, Drawing, Line, Rect, String
 
 from deck_model import DeckEntry
-from price_estimates import get_base_price, get_rarity_multiplier
+from price_estimates import get_rarity_multiplier
+from pricing.ygopro_prices import (
+    PriceConfig,
+    RateLimiter,
+    default_name_map_path,
+    default_price_cache_path,
+    ensure_prices,
+    load_name_cache,
+    load_price_cache,
+    resolve_card_id,
+    save_name_cache_atomic,
+    save_price_cache_atomic,
+)
 from sort_utils import canonical_sort_entries
 from yugioh_data import (
     PULL_RARITIES,
@@ -24,6 +37,39 @@ from yugioh_data import (
 
 OPTIONAL_MAX_DELTA = 5
 RECOMMENDED_MIN_DELTA = 6
+
+
+def _build_price_config() -> PriceConfig:
+    return PriceConfig(
+        cache_path=default_price_cache_path(),
+        name_map_path=default_name_map_path(),
+    )
+
+
+def _resolve_entry_ids(
+    entries: List[DeckEntry],
+    config: PriceConfig,
+) -> tuple[dict[str, dict], dict[str, int], dict[int, int]]:
+    price_cache = load_price_cache(config.cache_path)
+    name_cache = load_name_cache(config.name_map_path)
+    entry_id_map: dict[int, int] = {}
+    with requests.Session() as session:
+        limiter = RateLimiter(config.max_requests_per_second)
+        for index, entry in enumerate(entries):
+            card_id = None
+            if entry.card_id:
+                try:
+                    card_id = int(entry.card_id)
+                except ValueError:
+                    card_id = None
+            if card_id is None and entry.name_eng:
+                card_id = resolve_card_id(session, entry.name_eng, name_cache, limiter)
+            if card_id is None and entry.name_ger:
+                card_id = resolve_card_id(session, entry.name_ger, name_cache, limiter)
+            if card_id is None:
+                continue
+            entry_id_map[index] = card_id
+    return price_cache, name_cache, entry_id_map
 
 
 def _get_hierarchy(card: dict | None) -> Dict[str, int]:
@@ -238,7 +284,12 @@ def _build_certificate(
     return drawing
 
 
-def export_overview_pdf(path: str, header: Dict[str, str], entries: List[DeckEntry]) -> None:
+def export_overview_pdf(
+    path: str,
+    header: Dict[str, str],
+    entries: List[DeckEntry],
+    price_config: PriceConfig | None = None,
+) -> None:
     doc = SimpleDocTemplate(
         path,
         pagesize=A4,
@@ -288,17 +339,34 @@ def export_overview_pdf(path: str, header: Dict[str, str], entries: List[DeckEnt
 
     story = [Paragraph("Print & Rarity Overview", title_style), Spacer(1, 6)]
     sorted_entries = canonical_sort_entries(entries)
+    config = price_config or _build_price_config()
+    price_cache, name_cache, entry_id_map = _resolve_entry_ids(sorted_entries, config)
+    if entry_id_map:
+        ensure_prices(
+            set(entry_id_map.values()),
+            price_cache,
+            ttl_days=config.ttl_days,
+            force_refresh=config.force_refresh,
+            max_requests_per_second=config.max_requests_per_second,
+        )
+        save_price_cache_atomic(config.cache_path, price_cache)
+        save_name_cache_atomic(config.name_map_path, name_cache)
     recommended_entries = 0
     optional_entries = 0
+    total_base_est = 0.0
     total_current_est = 0.0
     total_best_est = 0.0
 
     for section in ["Main", "Extra", "Side"]:
-        section_entries = [entry for entry in sorted_entries if entry.section == section]
+        section_entries = [
+            (index, entry)
+            for index, entry in enumerate(sorted_entries)
+            if entry.section == section
+        ]
         if not section_entries:
             continue
         story.append(Paragraph(f"{section} Deck", section_style))
-        for entry in section_entries:
+        for entry_index, entry in section_entries:
             card = _lookup_card(entry)
             hierarchy = _get_hierarchy(card)
 
@@ -315,7 +383,9 @@ def export_overview_pdf(path: str, header: Dict[str, str], entries: List[DeckEnt
             best_weight = max((hierarchy.get(rarity, 0) for rarity in rarities), default=0)
             best_rarity = rarities[-1] if rarities else "—"
             delta = best_weight - current_weight
-            base_price = get_base_price(entry.name_eng)
+            card_id = entry_id_map.get(entry_index)
+            cache_entry = price_cache.get(str(card_id)) if card_id is not None else None
+            base_price = cache_entry.get("cardmarket_price", 0.0) if cache_entry else 0.0
             current_multiplier = get_rarity_multiplier(entry.rarity)
             best_multiplier = get_rarity_multiplier(best_rarity) if best_rarity != "—" else 1.0
             current_est = base_price * current_multiplier
@@ -325,6 +395,7 @@ def export_overview_pdf(path: str, header: Dict[str, str], entries: List[DeckEnt
                 delta_pct = (delta_est / current_est) * 100
             else:
                 delta_pct = None
+            total_base_est += base_price * entry.amount
             total_current_est += current_est * entry.amount
             total_best_est += best_est * entry.amount
             recommended_rarities, optional_rarities = _split_upgrade_rarities(
@@ -361,8 +432,8 @@ def export_overview_pdf(path: str, header: Dict[str, str], entries: List[DeckEnt
             )
             delta_pct_display = f"{delta_pct:.1f}%" if delta_pct is not None else "—"
             price_line = (
-                f"€cur: {current_est:.2f}  €best: {best_est:.2f}  "
-                f"Δ€: {delta_est:.2f}  Δ%: {delta_pct_display}"
+                f"CM€: {base_price:.2f}  €cur: {current_est:.2f}  "
+                f"€best: {best_est:.2f}  Δ€: {delta_est:.2f}  Δ%: {delta_pct_display}"
             )
             story.append(Paragraph(price_line, line_style))
 
@@ -396,8 +467,9 @@ def export_overview_pdf(path: str, header: Dict[str, str], entries: List[DeckEnt
     story.append(
         Paragraph(
             (
-                f"€cur: {total_current_est:.2f}  €best: {total_best_est:.2f}  "
-                f"Δ€: {total_delta_est:.2f}  Δ%: {total_delta_pct_display}"
+                f"Σbase: {total_base_est:.2f}  Σcur: {total_current_est:.2f}  "
+                f"Σbest: {total_best_est:.2f}  ΣΔ: {total_delta_est:.2f}  "
+                f"ΣΔ%: {total_delta_pct_display}"
             ),
             line_style,
         )
