@@ -3,12 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from deck_model import DeckEntry
-from yugioh_data import (
-    get_card_by_id,
-    get_card_by_name,
-    load_rarity_hierarchy_main,
-    select_rarity_hierarchy,
-)
+from yugioh_data import get_card_by_id, get_card_by_name, rarity_order_index
 
 SECTION_ORDER = {"Main": 0, "Extra": 1, "Side": 2}
 
@@ -37,9 +32,8 @@ def _lookup_card(entry: DeckEntry) -> Optional[dict]:
 
 
 def rarity_rank_for_entry(entry: DeckEntry, card_dict: Optional[dict]) -> int:
-    hierarchies = load_rarity_hierarchy_main()
-    hierarchy = select_rarity_hierarchy(hierarchies, card_dict)
-    return hierarchy.get(entry.rarity or "", 0)
+    del card_dict
+    return rarity_order_index(entry.rarity or "")
 
 
 def canonical_sort_key(entry: DeckEntry) -> tuple:

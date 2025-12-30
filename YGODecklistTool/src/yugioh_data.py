@@ -33,6 +33,33 @@ FRAME_TYPE_TO_HIERARCHY_KEY = {
     "pendulum_xyz": "pendulum_xyz",
     "xyz_pendulum": "pendulum_xyz",
 }
+RARITY_ORDER = [
+    "Common",
+    "Rare",
+    "Super Rare",
+    "Ultra Rare",
+    "Secret Rare",
+    "Prismatic Secret Rare",
+    "Ghost Rare",
+    "Ultimate Rare",
+    "Collector's Rare",
+    "Starlight Rare",
+    "Quarter Century Secret Rare",
+    "Starfoil Rare",
+    "Shatterfoil Rare",
+    "Mosaic Rare",
+    "Super Parallel Rare",
+    "Ultra Parallel Rare",
+    "Secret Parallel Rare",
+    "Blue Ultra Rare",
+    "Green Ultra Rare",
+    "Red Ultra Rare",
+    "Gold Rare",
+    "Premium Gold Rare",
+    "Gold Secret Rare",
+    "Platinum Rare",
+    "Platinum Secret Rare",
+]
 
 
 def _get_base_path() -> Path:
@@ -75,6 +102,22 @@ def load_cards(language: str = "en") -> Dict[str, Dict[str, Any]]:
 @lru_cache(maxsize=1)
 def load_rarity_hierarchy_main() -> Dict[str, Dict[str, int]]:
     return _load_json_asset("rarity_hierarchy_main.json")
+
+
+def rarity_order_index(rarity: str) -> int:
+    if not rarity:
+        return len(RARITY_ORDER)
+    try:
+        return RARITY_ORDER.index(rarity)
+    except ValueError:
+        return len(RARITY_ORDER)
+
+
+def order_rarities(rarities: List[str]) -> List[str]:
+    remaining = [rarity for rarity in rarities if rarity not in RARITY_ORDER]
+    remaining.sort(key=str.casefold)
+    ordered = [rarity for rarity in RARITY_ORDER if rarity in rarities]
+    return ordered + remaining
 
 
 def _pendulum_key_from_type(type_label: str) -> Optional[str]:

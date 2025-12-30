@@ -17,6 +17,7 @@ from yugioh_data import (
     load_rarity_hierarchy_main,
     select_rarity_hierarchy,
     search_card_names,
+    order_rarities,
 )
 
 SECTIONS = ["Main", "Extra", "Side"]
@@ -334,7 +335,7 @@ class DeckApp:
 
     def _refresh_rarity_values(self) -> None:
         hierarchy = self._get_applicable_hierarchy()
-        values = sorted(hierarchy.keys(), key=lambda k: hierarchy[k])
+        values = order_rarities(list(hierarchy.keys()))
         self.rarity_combo["values"] = values
         if self.rarity_var.get() not in values:
             self.rarity_var.set(values[0] if values else "")
