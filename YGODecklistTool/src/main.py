@@ -78,6 +78,7 @@ class DeckApp:
         self.current_sort_column: Optional[str] = None
         self.current_sort_desc = False
         self.db_available = True
+        self.db_available_ger = True
         try:
             self.rarity_main = load_rarity_hierarchy_main()
             self.rarity_extra = load_rarity_hierarchy_extra_side()
@@ -227,6 +228,7 @@ class DeckApp:
         self.name_ger_var = tk.StringVar()
         self.name_ger_entry = ttk.Entry(form, textvariable=self.name_ger_var)
         self.name_ger_entry.grid(row=2, column=1, sticky=tk.EW, padx=5, pady=2)
+        self.name_ger_entry.bind("<KeyRelease>", self._on_name_ger_key)
 
         ttk.Label(form, text="Card ID").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
         self.card_id_var = tk.StringVar()
@@ -290,6 +292,7 @@ class DeckApp:
 
         colors = self._colors
         self.autocomplete = Autocomplete(self.name_eng_entry, self._select_autocomplete, colors)
+        self.autocomplete_ger = Autocomplete(self.name_ger_entry, self._select_autocomplete_ger, colors)
         self._refresh_rarity_values()
         self._apply_canonical_sort()
         self._refresh_tree()
@@ -317,6 +320,14 @@ class DeckApp:
                 return None
         if self.name_eng_var.get().strip():
             return get_card_by_name(self.name_eng_var.get().strip())
+        if self.name_ger_var.get().strip():
+            try:
+                card = get_card_by_name(self.name_ger_var.get().strip(), language="de")
+            except FileNotFoundError:
+                self.db_available_ger = False
+                card = None
+            if card and card.get("id"):
+                return get_card_by_id(card.get("id"))
         return None
 
     def _get_applicable_hierarchy(self) -> Dict[str, int]:
@@ -357,7 +368,24 @@ class DeckApp:
             self.db_available = False
             self.autocomplete.hide()
             return
+        self.autocomplete_ger.hide()
         self.autocomplete.show(matches)
+
+    def _on_name_ger_key(self, _event) -> None:
+        if not self.db_available_ger:
+            return
+        text = self.name_ger_var.get()
+        if not text:
+            self.autocomplete_ger.hide()
+            return
+        try:
+            matches = search_card_names(text, language="de")
+        except FileNotFoundError:
+            self.db_available_ger = False
+            self.autocomplete_ger.hide()
+            return
+        self.autocomplete.hide()
+        self.autocomplete_ger.show(matches)
 
     def _select_autocomplete(self, value: str) -> None:
         self.name_eng_var.set(value)
@@ -368,6 +396,29 @@ class DeckApp:
             card = None
         if card:
             self.card_id_var.set(str(card.get("id", "")))
+            if not self.name_ger_var.get().strip() and self.db_available_ger:
+                try:
+                    card_de = get_card_by_id(card.get("id", 0), language="de")
+                except FileNotFoundError:
+                    self.db_available_ger = False
+                    card_de = None
+                if card_de:
+                    self.name_ger_var.set(card_de.get("name", ""))
+        self._refresh_rarity_values()
+
+    def _select_autocomplete_ger(self, value: str) -> None:
+        self.name_ger_var.set(value)
+        try:
+            card = get_card_by_name(value, language="de")
+        except FileNotFoundError:
+            self.db_available_ger = False
+            card = None
+        if card:
+            self.card_id_var.set(str(card.get("id", "")))
+            if not self.name_eng_var.get().strip():
+                card_en = get_card_by_id(card.get("id", 0))
+                if card_en:
+                    self.name_eng_var.set(card_en.get("name", ""))
         self._refresh_rarity_values()
 
     def _lookup_by_id(self) -> None:
@@ -389,10 +440,30 @@ class DeckApp:
             messagebox.showerror("Not found", "Card ID not found in database.")
             return
         self.name_eng_var.set(card.get("name", ""))
+        if self.db_available_ger:
+            try:
+                card_de = get_card_by_id(card_id, language="de")
+            except FileNotFoundError:
+                self.db_available_ger = False
+                card_de = None
+            if card_de:
+                self.name_ger_var.set(card_de.get("name", ""))
         self._refresh_rarity_values()
 
     def _entry_from_form(self) -> Optional[DeckEntry]:
         name_eng = self.name_eng_var.get().strip()
+        name_ger = self.name_ger_var.get().strip()
+        if not name_eng and name_ger and self.db_available_ger:
+            try:
+                card = get_card_by_name(name_ger, language="de")
+            except FileNotFoundError:
+                self.db_available_ger = False
+                card = None
+            if card and card.get("id"):
+                card_en = get_card_by_id(card.get("id"))
+                if card_en:
+                    name_eng = card_en.get("name", "")
+                    self.name_eng_var.set(name_eng)
         if not name_eng:
             messagebox.showerror("Missing name", "Name [ENG] is required.")
             return None
@@ -400,7 +471,7 @@ class DeckApp:
             section=self.section_var.get(),
             amount=int(self.amount_var.get()),
             name_eng=name_eng,
-            name_ger=self.name_ger_var.get().strip(),
+            name_ger=name_ger,
             card_id=self.card_id_var.get().strip(),
             set_code=self.set_code_var.get().strip(),
             rarity=self.rarity_var.get().strip(),

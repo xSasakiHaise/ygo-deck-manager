@@ -23,9 +23,16 @@ def _load_json_asset(filename: str) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-@lru_cache(maxsize=1)
-def load_cards() -> Dict[str, Dict[str, Any]]:
-    data = _load_json_asset("cards.json")
+LANGUAGE_ASSETS = {
+    "en": "cards.json",
+    "de": "cards_de.json",
+}
+
+
+@lru_cache(maxsize=4)
+def load_cards(language: str = "en") -> Dict[str, Dict[str, Any]]:
+    filename = LANGUAGE_ASSETS.get(language, LANGUAGE_ASSETS["en"])
+    data = _load_json_asset(filename)
     cards = data.get("data", [])
     by_name: Dict[str, Dict[str, Any]] = {}
     by_id: Dict[int, Dict[str, Any]] = {}
@@ -49,24 +56,24 @@ def load_rarity_hierarchy_extra_side() -> Dict[str, int]:
     return _load_json_asset("rarity_hierarchy_extra_side.json")
 
 
-def search_card_names(prefix: str, limit: int = 20) -> List[str]:
+def search_card_names(prefix: str, limit: int = 20, language: str = "en") -> List[str]:
     if not prefix:
         return []
-    cards = load_cards()["by_name"]
+    cards = load_cards(language)["by_name"]
     prefix_lower = prefix.lower()
     matches = [card["name"] for key, card in cards.items() if key.startswith(prefix_lower)]
     matches.sort()
     return matches[:limit]
 
 
-def get_card_by_name(name: str) -> Optional[Dict[str, Any]]:
+def get_card_by_name(name: str, language: str = "en") -> Optional[Dict[str, Any]]:
     if not name:
         return None
-    return load_cards()["by_name"].get(name.lower())
+    return load_cards(language)["by_name"].get(name.lower())
 
 
-def get_card_by_id(card_id: int) -> Optional[Dict[str, Any]]:
-    return load_cards()["by_id"].get(card_id)
+def get_card_by_id(card_id: int, language: str = "en") -> Optional[Dict[str, Any]]:
+    return load_cards(language)["by_id"].get(card_id)
 
 
 def _is_ocg_set_code(set_code: str) -> bool:
