@@ -8,6 +8,32 @@ from typing import Any, Dict, List, Optional, Set
 
 PULL_RARITIES = {"Short Print", "Super Short Print"}
 
+RARITY_HIERARCHY_DEFAULT = "effect_monster"
+FRAME_TYPE_TO_HIERARCHY_KEY = {
+    "normal": "normal_monster",
+    "effect": "effect_monster",
+    "spell": "spell",
+    "trap": "trap",
+    "fusion": "fusion",
+    "synchro": "synchro",
+    "xyz": "xyz",
+    "link": "link",
+    "ritual": "ritual",
+    "token": "token",
+    "pendulum_normal": "pendulum_normal",
+    "normal_pendulum": "pendulum_normal",
+    "pendulum_effect": "pendulum_effect",
+    "effect_pendulum": "pendulum_effect",
+    "pendulum_ritual": "pendulum_ritual",
+    "ritual_pendulum": "pendulum_ritual",
+    "pendulum_fusion": "pendulum_fusion",
+    "fusion_pendulum": "pendulum_fusion",
+    "pendulum_synchro": "pendulum_synchro",
+    "synchro_pendulum": "pendulum_synchro",
+    "pendulum_xyz": "pendulum_xyz",
+    "xyz_pendulum": "pendulum_xyz",
+}
+
 
 def _get_base_path() -> Path:
     if hasattr(sys, "_MEIPASS"):
@@ -47,13 +73,80 @@ def load_cards(language: str = "en") -> Dict[str, Dict[str, Any]]:
 
 
 @lru_cache(maxsize=1)
-def load_rarity_hierarchy_main() -> Dict[str, int]:
+def load_rarity_hierarchy_main() -> Dict[str, Dict[str, int]]:
     return _load_json_asset("rarity_hierarchy_main.json")
 
 
-@lru_cache(maxsize=1)
-def load_rarity_hierarchy_extra_side() -> Dict[str, int]:
-    return _load_json_asset("rarity_hierarchy_extra_side.json")
+def _pendulum_key_from_type(type_label: str) -> Optional[str]:
+    if "pendulum" not in type_label:
+        return None
+    if "normal" in type_label:
+        return "pendulum_normal"
+    if "ritual" in type_label:
+        return "pendulum_ritual"
+    if "fusion" in type_label:
+        return "pendulum_fusion"
+    if "synchro" in type_label:
+        return "pendulum_synchro"
+    if "xyz" in type_label:
+        return "pendulum_xyz"
+    if "effect" in type_label:
+        return "pendulum_effect"
+    return "pendulum_effect"
+
+
+def _key_from_type_label(type_label: str) -> Optional[str]:
+    pendulum_key = _pendulum_key_from_type(type_label)
+    if pendulum_key:
+        return pendulum_key
+    if "spell" in type_label:
+        return "spell"
+    if "trap" in type_label:
+        return "trap"
+    if "token" in type_label:
+        return "token"
+    if "ritual" in type_label:
+        return "ritual"
+    if "fusion" in type_label:
+        return "fusion"
+    if "synchro" in type_label:
+        return "synchro"
+    if "xyz" in type_label:
+        return "xyz"
+    if "link" in type_label:
+        return "link"
+    if "normal" in type_label:
+        return "normal_monster"
+    if "effect" in type_label:
+        return "effect_monster"
+    return None
+
+
+def rarity_hierarchy_key_for_card(card: Optional[Dict[str, Any]]) -> str:
+    if not card:
+        return RARITY_HIERARCHY_DEFAULT
+    frame_type = str(card.get("frameType", "")).lower()
+    if frame_type:
+        key = FRAME_TYPE_TO_HIERARCHY_KEY.get(frame_type)
+        if key:
+            return key
+    type_label = str(card.get("type", "")).lower()
+    key = _key_from_type_label(type_label)
+    if key:
+        return key
+    return RARITY_HIERARCHY_DEFAULT
+
+
+def select_rarity_hierarchy(
+    hierarchies: Dict[str, Dict[str, int]],
+    card: Optional[Dict[str, Any]],
+) -> Dict[str, int]:
+    key = rarity_hierarchy_key_for_card(card)
+    if key in hierarchies:
+        return hierarchies[key]
+    if RARITY_HIERARCHY_DEFAULT in hierarchies:
+        return hierarchies[RARITY_HIERARCHY_DEFAULT]
+    return next(iter(hierarchies.values()), {})
 
 
 def search_card_names(prefix: str, limit: int = 20, language: str = "en") -> List[str]:
