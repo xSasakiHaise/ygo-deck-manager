@@ -17,21 +17,17 @@ from yugioh_data import (
     extract_rarities_tcg,
     get_card_by_id,
     get_card_by_name,
-    is_extra_deck_monster,
-    load_rarity_hierarchy_extra_side,
     load_rarity_hierarchy_main,
+    select_rarity_hierarchy,
 )
 
 OPTIONAL_MAX_DELTA = 5
 RECOMMENDED_MIN_DELTA = 6
 
 
-def _get_hierarchy(section: str, card: dict | None) -> Dict[str, int]:
-    if section == "Extra":
-        return load_rarity_hierarchy_extra_side()
-    if section == "Side" and card is not None and is_extra_deck_monster(card):
-        return load_rarity_hierarchy_extra_side()
-    return load_rarity_hierarchy_main()
+def _get_hierarchy(card: dict | None) -> Dict[str, int]:
+    hierarchies = load_rarity_hierarchy_main()
+    return select_rarity_hierarchy(hierarchies, card)
 
 
 def _is_valid_rarity(value: str) -> bool:
@@ -301,7 +297,7 @@ def export_overview_pdf(path: str, header: Dict[str, str], entries: List[DeckEnt
         story.append(Paragraph(f"{section} Deck", section_style))
         for entry in section_entries:
             card = _lookup_card(entry)
-            hierarchy = _get_hierarchy(entry.section, card)
+            hierarchy = _get_hierarchy(card)
 
             rarities = []
             if card is not None:

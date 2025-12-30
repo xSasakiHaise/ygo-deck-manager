@@ -14,9 +14,8 @@ from sort_utils import canonical_sort_entries, canonical_sort_key, rarity_rank_f
 from yugioh_data import (
     get_card_by_id,
     get_card_by_name,
-    is_extra_deck_monster,
-    load_rarity_hierarchy_extra_side,
     load_rarity_hierarchy_main,
+    select_rarity_hierarchy,
     search_card_names,
 )
 
@@ -81,11 +80,9 @@ class DeckApp:
         self.db_available_ger = True
         try:
             self.rarity_main = load_rarity_hierarchy_main()
-            self.rarity_extra = load_rarity_hierarchy_extra_side()
         except FileNotFoundError as exc:
             messagebox.showwarning("Missing assets", str(exc))
             self.rarity_main = {}
-            self.rarity_extra = {}
 
         self._apply_style()
         self._build_ui()
@@ -331,14 +328,9 @@ class DeckApp:
         return None
 
     def _get_applicable_hierarchy(self) -> Dict[str, int]:
-        section = self.section_var.get()
-        if section == "Extra":
-            return self.rarity_extra
-        if section == "Side":
-            card = self._get_card_from_form()
-            if card and is_extra_deck_monster(card):
-                return self.rarity_extra
-        return self.rarity_main
+        hierarchies = self.rarity_main
+        card = self._get_card_from_form()
+        return select_rarity_hierarchy(hierarchies, card)
 
     def _refresh_rarity_values(self) -> None:
         hierarchy = self._get_applicable_hierarchy()

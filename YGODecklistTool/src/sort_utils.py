@@ -6,9 +6,8 @@ from deck_model import DeckEntry
 from yugioh_data import (
     get_card_by_id,
     get_card_by_name,
-    is_extra_deck_monster,
-    load_rarity_hierarchy_extra_side,
     load_rarity_hierarchy_main,
+    select_rarity_hierarchy,
 )
 
 SECTION_ORDER = {"Main": 0, "Extra": 1, "Side": 2}
@@ -38,12 +37,8 @@ def _lookup_card(entry: DeckEntry) -> Optional[dict]:
 
 
 def rarity_rank_for_entry(entry: DeckEntry, card_dict: Optional[dict]) -> int:
-    if entry.section == "Extra":
-        hierarchy = load_rarity_hierarchy_extra_side()
-    elif entry.section == "Side" and card_dict is not None and is_extra_deck_monster(card_dict):
-        hierarchy = load_rarity_hierarchy_extra_side()
-    else:
-        hierarchy = load_rarity_hierarchy_main()
+    hierarchies = load_rarity_hierarchy_main()
+    hierarchy = select_rarity_hierarchy(hierarchies, card_dict)
     return hierarchy.get(entry.rarity or "", 0)
 
 
