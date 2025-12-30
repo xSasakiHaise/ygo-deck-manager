@@ -181,5 +181,4 @@ $separator = ";"
   --add-data "$assetsDir\cards.json${separator}assets" `
   --add-data "$assetsDir\cards_de.json${separator}assets" `
   --add-data "$assetsDir\rarity_hierarchy_main.json${separator}assets" `
-  --add-data "$assetsDir\rarity_hierarchy_extra_side.json${separator}assets" `
   (Join-Path $projectRoot "src\main.py")
