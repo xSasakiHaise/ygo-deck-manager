@@ -161,12 +161,16 @@ if ($LASTEXITCODE -ne 0) {
 & $pythonExe -m pip install -r (Join-Path $projectRoot "requirements.txt")
 
 $cardsPath = Join-Path $projectRoot "assets\cards.json"
+$cardsDePath = Join-Path $projectRoot "assets\cards_de.json"
 try {
   & $pythonExe (Join-Path $projectRoot "tools\download_cards_db.py")
 } catch {
   if (!(Test-Path $cardsPath)) {
     throw "Card database download failed and assets/cards.json is missing. Aborting."
   }
+}
+if (!(Test-Path $cardsDePath)) {
+  throw "Card database download failed and assets/cards_de.json is missing. Aborting."
 }
 
 $pyinstaller = Join-Path $venvPath "Scripts\pyinstaller.exe"
@@ -175,6 +179,7 @@ $separator = ";"
 
 & $pyinstaller --onefile --noconsole --name "YGODecklistTool" `
   --add-data "$assetsDir\cards.json${separator}assets" `
+  --add-data "$assetsDir\cards_de.json${separator}assets" `
   --add-data "$assetsDir\rarity_hierarchy_main.json${separator}assets" `
   --add-data "$assetsDir\rarity_hierarchy_extra_side.json${separator}assets" `
   (Join-Path $projectRoot "src\main.py")
