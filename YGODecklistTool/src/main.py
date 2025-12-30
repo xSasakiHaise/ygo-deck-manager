@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import argparse
 import tkinter as tk
 import webbrowser
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
@@ -9,6 +11,12 @@ from deck_io import export_cardmarket_wishlist, load_deck, save_deck
 from deck_model import DeckEntry, DeckModel
 from pdf_decklist import export_decklist_pdf
 from pdf_overview import export_overview_pdf
+from pricing.ygopro_prices import (
+    PRICE_TTL_DAYS,
+    PriceConfig,
+    default_name_map_path,
+    default_price_cache_path,
+)
 from settings import load_settings, save_settings
 from sort_utils import canonical_sort_entries, canonical_sort_key, rarity_rank_for_entry, section_rank
 from yugioh_data import (
@@ -70,11 +78,12 @@ class Autocomplete:
 
 
 class DeckApp:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, price_config: PriceConfig | None = None) -> None:
         self.root = root
         self.root.title("YGO Decklist Tool")
         self.model = DeckModel()
         self.settings = load_settings()
+        self.price_config = price_config
         self.current_sort_column: Optional[str] = None
         self.current_sort_desc = False
         self.db_available = True
@@ -641,7 +650,7 @@ class DeckApp:
             "event_name": self.event_var.get().strip(),
         }
         try:
-            export_overview_pdf(path, header, self.model.entries)
+            export_overview_pdf(path, header, self.model.entries, price_config=self.price_config)
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))
             return
@@ -706,8 +715,35 @@ class DeckApp:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="YGO Decklist Tool")
+    parser.add_argument(
+        "--prices-refresh",
+        action="store_true",
+        help="Force refresh of cached YGOPRODeck prices.",
+    )
+    parser.add_argument(
+        "--prices-ttl-days",
+        type=int,
+        default=PRICE_TTL_DAYS,
+        help="Override the price cache TTL in days.",
+    )
+    parser.add_argument(
+        "--prices-cache",
+        type=Path,
+        help="Override the YGOPRODeck price cache path.",
+    )
+    args = parser.parse_args()
+
+    price_cache_path = args.prices_cache or default_price_cache_path()
+    price_config = PriceConfig(
+        cache_path=price_cache_path,
+        name_map_path=default_name_map_path(),
+        ttl_days=args.prices_ttl_days,
+        force_refresh=args.prices_refresh,
+    )
+
     root = tk.Tk()
-    app = DeckApp(root)
+    app = DeckApp(root, price_config=price_config)
     root.mainloop()
 
 
