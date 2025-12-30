@@ -11,6 +11,7 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 from reportlab.graphics.shapes import Circle, Drawing, Line, Rect, String
 
 from deck_model import DeckEntry
+from price_estimates import get_base_price, get_rarity_multiplier
 from sort_utils import canonical_sort_entries
 from yugioh_data import (
     PULL_RARITIES,
@@ -289,6 +290,8 @@ def export_overview_pdf(path: str, header: Dict[str, str], entries: List[DeckEnt
     sorted_entries = canonical_sort_entries(entries)
     recommended_entries = 0
     optional_entries = 0
+    total_current_est = 0.0
+    total_best_est = 0.0
 
     for section in ["Main", "Extra", "Side"]:
         section_entries = [entry for entry in sorted_entries if entry.section == section]
@@ -312,6 +315,18 @@ def export_overview_pdf(path: str, header: Dict[str, str], entries: List[DeckEnt
             best_weight = max((hierarchy.get(rarity, 0) for rarity in rarities), default=0)
             best_rarity = rarities[-1] if rarities else "—"
             delta = best_weight - current_weight
+            base_price = get_base_price(entry.name_eng)
+            current_multiplier = get_rarity_multiplier(entry.rarity)
+            best_multiplier = get_rarity_multiplier(best_rarity) if best_rarity != "—" else 1.0
+            current_est = base_price * current_multiplier
+            best_est = base_price * best_multiplier
+            delta_est = best_est - current_est
+            if current_est > 0:
+                delta_pct = (delta_est / current_est) * 100
+            else:
+                delta_pct = None
+            total_current_est += current_est * entry.amount
+            total_best_est += best_est * entry.amount
             recommended_rarities, optional_rarities = _split_upgrade_rarities(
                 rarities,
                 hierarchy,
@@ -344,6 +359,12 @@ def export_overview_pdf(path: str, header: Dict[str, str], entries: List[DeckEnt
                     line_style,
                 )
             )
+            delta_pct_display = f"{delta_pct:.1f}%" if delta_pct is not None else "—"
+            price_line = (
+                f"€cur: {current_est:.2f}  €best: {best_est:.2f}  "
+                f"Δ€: {delta_est:.2f}  Δ%: {delta_pct_display}"
+            )
+            story.append(Paragraph(price_line, line_style))
 
             if delta <= 0:
                 story.append(Paragraph("Upgrades: —", line_style))
@@ -364,6 +385,23 @@ def export_overview_pdf(path: str, header: Dict[str, str], entries: List[DeckEnt
                     )
             story.append(Spacer(1, 6))
         story.append(Spacer(1, 10))
+
+    total_delta_est = total_best_est - total_current_est
+    if total_current_est > 0:
+        total_delta_pct = (total_delta_est / total_current_est) * 100
+    else:
+        total_delta_pct = None
+    total_delta_pct_display = f"{total_delta_pct:.1f}%" if total_delta_pct is not None else "—"
+    story.append(Paragraph("Totals (upgrades)", section_style))
+    story.append(
+        Paragraph(
+            (
+                f"€cur: {total_current_est:.2f}  €best: {total_best_est:.2f}  "
+                f"Δ€: {total_delta_est:.2f}  Δ%: {total_delta_pct_display}"
+            ),
+            line_style,
+        )
+    )
 
     story.append(Paragraph("Summary", summary_style))
     story.append(
